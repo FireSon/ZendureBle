@@ -1,0 +1,235 @@
+﻿@page "/"
+@using Blazor.Bluetooth
+@using System.Text
+@using System.Text.Json
+@inject Blazored.LocalStorage.ILocalStorageService localStorage
+
+<PageTitle>Zendure Bluetooth</PageTitle>
+
+<form method="post" @onsubmit="Submit" @formname="starship-plain-form" class="mb-3">
+    <AntiforgeryToken />
+    <div class="mb-3">
+        <label class="form-label">
+            Mqtt Server:
+        </label>
+        <InputText @bind-Value="Model.IotUrl" class="form-control" />
+
+        <label class="form-label">
+            Wifi Ssid:
+        </label>
+        <InputText @bind-Value="Model.WifiSsid" class="form-control" />
+
+        <label class="form-label">
+            Wifi password:
+        </label>
+        <InputText type="password" @bind-Value="Model.WifiPswd" class="form-control" />
+    </div>
+    <div>
+        <button type="submit" class="btn btn-primary mb-3">Submit</button>
+    </div>
+</form>
+
+@if (Progress.Count > 0)
+{
+    <h2>Output</h2>
+    @foreach (var item in Progress)
+    {
+        <h3>@item</h3>
+    }
+}
+
+@code {
+	[Inject]
+	public IBluetoothNavigator? BluetoothNavigator { get; set; }
+	[SupplyParameterFromForm]
+	private BleInfo Model { get; set; } = new();
+	public List<string> Progress { get; set; } = new();
+
+	protected override async Task OnInitializedAsync()
+	{
+		Model.IotUrl = await localStorage.GetItemAsync<string>("IotUrl");
+		Model.WifiSsid = await localStorage.GetItemAsync<string>("ssid");
+		Model.WifiPswd = await localStorage.GetItemAsync<string>("password");
+	}
+
+	public class BleInfo
+	{
+		public string IotUrl { get; set; } = "mqtteu.zen-iot.com";
+		public string WifiSsid { get; set; } = "";
+		public string WifiPswd { get; set; } = "";
+
+		public string DeviceId { get; set; } = "";
+		public string SerialNumber { get; set; } = "";
+	}
+
+	public class BleGetInfo
+	{
+		public string deviceId { get; set; } = "";
+		public string deviceSn { get; set; } = "";
+	}
+
+	private void ShowProgress(string msg)
+	{
+		Progress.Add(msg);
+		StateHasChanged();
+	}
+
+	private async void Submit()
+	{
+		await localStorage.SetItemAsync("IotUrl", Model.IotUrl);
+		await localStorage.SetItemAsync("ssid", Model.WifiSsid);
+		await localStorage.SetItemAsync("password", Model.WifiPswd);
+
+
+		Progress.Clear();
+		if (BluetoothNavigator == null || !await BluetoothNavigator.GetAvailability())
+		{
+			ShowProgress("Bluetooth is not available on this device.");
+			return;
+		}
+
+		IDevice? device = null;
+		try
+		{
+			async Task Connect()
+			{
+				Progress.Clear();
+				ShowProgress("Connecting...");
+				await Task.Delay(1000);
+				await device.Gatt.Connect();
+				ShowProgress("Connected to " + device.Name);
+			}
+
+			var options = new RequestDeviceOptions
+            {
+                AcceptAllDevices = true,
+                OptionalServices = ["0000A002-0000-1000-8000-00805F9B34FB".ToLower()]
+            };
+			device = await BluetoothNavigator.RequestDevice(options);
+			for (int i = 0; i < 3; i++)
+			{
+				try
+				{
+					await Connect();
+
+					//Initialize the services and characteristics
+					var service = await device.Gatt.GetPrimaryService("0000A002-0000-1000-8000-00805f9b34fb".ToLower());
+					var bleRead = await service.GetCharacteristic("0000c305-0000-1000-8000-00805f9b34fb");
+					bleRead.OnRaiseCharacteristicValueChanged += (sender, e) =>
+					{
+						try
+						{
+                            var str = System.Text.Encoding.Default.GetString(e.Value);
+                            if (str.Contains("getInfo-rsp"))
+                            {
+                                var data = JsonSerializer.Deserialize<BleGetInfo>(str);
+                                Model.DeviceId = data?.deviceId ?? "";
+                                Model.SerialNumber = data?.deviceSn ?? "";
+                            }
+                            ShowProgress(str);
+                        }
+						catch (Exception ex)
+						{
+							Console.WriteLine(ex);
+                        }
+                    };
+                    await bleRead.StartNotifications();
+
+                    var bleWrite = await service.GetCharacteristic("0000c304-0000-1000-8000-00805f9b34fb");
+                    if (bleWrite.Properties.Read)
+                    {
+                        bleWrite.OnRaiseCharacteristicValueChanged += (sender, e) => { };
+                        await bleWrite.StartNotifications();
+                    }
+
+                    await bleWrite.WriteValueWithoutResponse(JsonSerializer.SerializeToUtf8Bytes(new
+                    {
+                        messageId = 101,
+                        method = "deviceInfo",
+                        slaveSN = "jump",
+                        timeZone = "GMT+08:00",
+                    }));
+
+                    //Set the IotUrl
+                    await bleWrite.WriteValueWithoutResponse(JsonSerializer.SerializeToUtf8Bytes(new
+                    {
+                        AM = 3,
+                        homeId = 64847,
+                        iotUrl = Model.IotUrl,
+                        messageId = 1002,
+                        method = "token",
+                        password = Model.WifiPswd,
+                        ssid = Model.WifiSsid,
+                        timeZone = "GMT+08:00",
+                        // timestamp = DateTime.Now.ToFileTime(),
+                        token = "abcdefghijklmnop",
+                    }));
+
+                    ShowProgress("IotUrl command sent");
+                    ShowProgress("Waiting for device (timeout max 60 seconds): " + device.Name);
+
+                    await Task.Delay(500);
+
+                    await bleWrite.WriteValueWithoutResponse(JsonSerializer.SerializeToUtf8Bytes(new
+                    {
+                        messageId = 1003,
+                        method = "station",
+                    }));
+                    Console.WriteLine("Station command sent");
+                    ShowProgress("Station command sent");
+
+                    //Wait for connection
+                    var time = DateTime.Now + TimeSpan.FromSeconds(60);
+                    while (!device.Gatt.Connected && DateTime.Now < time)
+                    {
+                        await device.Gatt.Connect();
+                        await Task.Delay(3000);
+                    }
+
+                    // Get the device info
+                    time = DateTime.Now + TimeSpan.FromSeconds(60);
+                    while (string.IsNullOrWhiteSpace(Model.DeviceId) && DateTime.Now < time)
+                    {
+                        // Send the info command
+                        await bleWrite.WriteValueWithoutResponse(JsonSerializer.SerializeToUtf8Bytes(new
+                        {
+                            messageId = "1",
+                            method = "getInfo",
+                            timestamp = DateTime.Now.ToFileTime(),
+                        }));
+                        await Task.Delay(1000);
+                    }
+                    if (string.IsNullOrWhiteSpace(Model.DeviceId))
+                        throw new Exception("Failed to get device info");
+
+                    await Task.Delay(5000);
+
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    ShowProgress("Connection attempt " + (i + 1) + " failed: " + ex.Message);
+                }
+            }
+
+            var bytes = Encoding.UTF8.GetBytes(Model.DeviceId);
+            var hashBytes = MD5.ComputeHash(bytes);
+            var devicePsw = Convert.ToHexString(hashBytes).Substring(8, 16);
+            ShowProgress($"Ble switch: make sure you add user: {Model.DeviceId.ToLower()} with password: {devicePsw} to your mqtt users");
+        }
+        catch (Exception ex)
+        {
+            ShowProgress(ex.Message);
+            Console.WriteLine(ex);
+        }
+        finally
+        {
+            if (device != null)
+            {
+                await device.Gatt.Disonnect();
+                Console.WriteLine("Connection closed");
+                ShowProgress("Connection closed");
+            }
+        }
+    }
+}
