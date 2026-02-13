@@ -168,7 +168,7 @@
                     ShowProgress("IotUrl command sent");
                     ShowProgress("Waiting for device (timeout max 60 seconds): " + device.Name);
 
-                    await Task.Delay(500);
+                    await Task.Delay(2000);
 
                     await bleWrite.WriteValueWithoutResponse(JsonSerializer.SerializeToUtf8Bytes(new
                     {
