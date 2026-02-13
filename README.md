@@ -1,38 +1,13 @@
-# Blazor WebAssembly App
+# ZendureBle
 
-A Blazor WebAssembly application built with .NET 9.0. 
-
-I built this to test webassembly static web apps in a github pages hosted solution.
+A Blazor WebAssembly application to switch Zendure devices to a MQTT server. 
 
 ## Live Demo
 
-🚀 **[View Live App](https://thrazznos.github.io/blazor_test/)**
+🚀 **[ZendureBle App](https://fireson.github.io/ZendureBle/)**
 
-## Features
+## MQTT Authorization
 
-- Counter demo page
-- Weather forecast sample
-- Responsive Bootstrap UI
-- Client-side routing
-
-## Development
-
-Run the app locally:
-
-```bash
-cd BlazorApp
-dotnet run
-```
-
-The app will be available at `http://localhost:5005`
-
-## Deployment
-
-This app is automatically deployed to GitHub Pages via GitHub Actions on every push to the `master` branch.
-
-## Technologies
-
-- .NET 9.0
-- Blazor WebAssembly
-- Bootstrap 5
-- GitHub Pages
+The app shows a username and password, which should be added to MQTT server
+- EMQX addon, no action necessary since annoymous access is allowed
+- Mosquitto addon, add username as user to Home Assistant
